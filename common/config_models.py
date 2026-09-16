@@ -50,21 +50,7 @@ class NetworkConfig(BaseConfigModel):
         description=(
             "Disable HTTP token authentication with requests.\n"
             "WARNING: This will make your instance vulnerable!\n"
-            "Only turn this on if nothing but trusted local clients can reach the API.\n"
-            "Note that web pages open in a browser on this machine also count as local\n"
-            "callers; restrict allowed_origins below if you disable auth."
-        ),
-    )
-    allowed_origins: Optional[List[str]] = Field(
-        ["*"],
-        description=(
-            'Origins allowed to call the API from a browser (default: ["*"]).\n'
-            "This is a CORS allowlist, not an auth mechanism: it only governs which\n"
-            "web pages a browser will let read this API's responses.\n"
-            'The default "*" means any site open in your browser can send requests to\n'
-            "this instance, which matters most when disable_auth is on. Restrict this to\n"
-            'your own frontends (e.g. ["http://localhost:8000"]) to close that off, or\n'
-            "use an empty list [] to block all browser (cross-origin) callers."
+            "Turn on this option if you are ONLY connecting from localhost."
         ),
     )
     disable_fetch_requests: Optional[bool] = Field(
@@ -95,15 +81,6 @@ class NetworkConfig(BaseConfigModel):
         ),
         ge=0,
     )
-    access_log: Optional[bool] = Field(
-        False,
-        description=(
-            "Log every HTTP request with client address, method, path and status "
-            "(default: False).\n"
-            "Generation requests are already logged in detail; this adds the rest, "
-            "such as model list and health polls."
-        ),
-    )
 
     # Converts all strings in the api_servers list to lowercase
     # NOTE: Expand if more models need this validator
@@ -129,21 +106,6 @@ class LoggingConfig(BaseConfigModel):
         False,
         description=(
             "Enable request logging (default: False).\nNOTE: Only use this for debugging!"
-        ),
-    )
-    log_live_status: Optional[bool] = Field(
-        True,
-        description=(
-            "Show a live status line below the log with cache usage and in-flight "
-            "jobs (default: True).\n"
-            "Only shown on an interactive terminal."
-        ),
-    )
-    log_timestamps: Optional[bool] = Field(
-        True,
-        description=(
-            "Prefix console log lines with the time of day (default: True).\n"
-            "The log files under logs/ always carry full timestamps."
         ),
     )
     log_chat_completion_requests: Optional[bool] = Field(
@@ -179,10 +141,8 @@ class ModelConfig(BaseConfigModel):
         description=(
             "Allow direct loading of models "
             "from a completion or chat completion request (default: False).\n"
-            "This method of loading is strict: a request naming a model that\n"
-            "doesn't exist or fails to load is rejected instead of running on the\n"
-            "loaded model. Enable dummy models to add exceptions for model names\n"
-            "that clients send without meaning a specific model."
+            "This method of loading is strict by default.\n"
+            "Enable dummy models to add exceptions for invalid model names."
         ),
     )
     use_dummy_models: Optional[bool] = Field(
@@ -596,10 +556,9 @@ class SamplingConfig(BaseConfigModel):
             "Find this in the sampler-overrides folder.\n"
             "This overrides default fallbacks for sampler values "
             "that are passed to the API.\n"
-            "NOTE: safe_defaults provides llama.cpp-style fallbacks (temperature 0.8, "
-            "top_k 40, top_p 0.95, min_p 0.05)\n"
-            "for frontends that don't send sampling parameters. Leaving this blank "
-            "means no fallbacks at all."
+            "NOTE: safe_defaults preset provides a fallback for frontends "
+            "that do not pass sampling params.\n"
+            "Remove it if not necessary."
         ),
     )
 
@@ -668,25 +627,37 @@ class MemoryConfig(BaseConfigModel):
         0,
         description=("Size of system memory second-tier K/V cache, in MB (default: 0)"),
     )
-    sysmem_multimodal_cache: Optional[int] = Field(
-        1024,
+    disk_kv_cache_dir: Optional[str] = Field(
+        None,
         description=(
-            "Size of the image embedding cache in system memory, in MB (default: 1024).\n"
-            "Encoded images are kept so repeated turns of a conversation don't re-run\n"
-            "the vision model. Images already in use by a request are never evicted;\n"
-            "a context whose images exceed the budget is cached only partially, with\n"
-            "a warning. Only applies when vision is enabled."
+            "Directory for a durable third-tier K/V cache (default: None, disabled).\n"
+            "Prompt cache entries and, on hybrid models, the recurrent checkpoints that\n"
+            "make them resumable are written here and survive a restart, so a returning\n"
+            "conversation is read back from disk instead of re-prefilled. Requires\n"
+            "sysmem_kv_cache, since disk records are paged in through the system memory\n"
+            "tier. Entries are scoped by a fingerprint of the model files and cache\n"
+            "layout, so a store written by a different model or build is ignored, never\n"
+            "reinterpreted."
         ),
-        ge=0,
+    )
+    disk_kv_cache: Optional[int] = Field(
+        0,
+        description=("Size of the durable third-tier K/V cache, in MB (default: 0)"),
+    )
+    disk_recurrent_cache: Optional[int] = Field(
+        0,
+        description=(
+            "Size of the durable recurrent checkpoint store, in MB\n"
+            "(default: 0, meaning one eighth of disk_kv_cache)"
+        ),
     )
     cuda_malloc_async: Optional[bool] = Field(
-        False,
+        True,
         description=(
-            "Use the cudaMallocAsync allocator backend in Torch (default: False).\n"
-            "When False, the allocator is left to the environment: unless\n"
-            "PYTORCH_CUDA_ALLOC_CONF is set, ExLlamaV3 enables expandable segments in\n"
-            "Torch's native allocator, which performs better than cudaMallocAsync.\n"
-            "Enable this to force the cudaMallocAsync backend instead."
+            "Use cudaMallocAsync backend in Torch (default: True).\n"
+            "Enabling this is generally preferable, but it may cause issues with certain\n"
+            "workloads. Try disabling it if you experience intermittent OoM errors. If\n"
+            "False, Torch will use the allocator defined by the system env"
         ),
     )
 

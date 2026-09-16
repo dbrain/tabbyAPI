@@ -18,7 +18,6 @@ from common.networking import (
     get_context_length_generator_error,
     get_generator_error,
     handle_request_error,
-    request_tag,
     DisconnectHandler,
 )
 from common.utils import unwrap
@@ -31,7 +30,7 @@ from endpoints.OAI.types.chat_completion import (
     ChatCompletionResponse,
 )
 from endpoints.OAI.types.common import UsageStats
-from endpoints.OAI.utils.completion import _gen_label, _parse_gen_request_id
+from endpoints.OAI.utils.completion import _parse_gen_request_id
 from endpoints.OAI.utils.stream_parser import (
     CONTENT,
     REASONING,
@@ -463,25 +462,11 @@ def resolve_template_vars(data: ChatCompletionRequest, container) -> dict:
     }
 
 
-def normalize_message_roles(data: ChatCompletionRequest):
-    """
-    Map the OpenAI "developer" role onto "system". Most chat templates only know
-    system/user/assistant/tool and raise on anything else; the templates that do
-    handle "developer" (Harmony) treat it the same as system.
-    """
-
-    for message in data.messages:
-        if message.role == "developer":
-            message.role = "system"
-
-
 async def apply_chat_template(data: ChatCompletionRequest):
     """
     Compile the prompt and get any additional stop strings from the template.
     Template stop strings can be overriden by sampler overrides if force is true.
     """
-
-    normalize_message_roles(data)
 
     # Locally store tools dict
     tools = data.model_dump()["tools"]
@@ -540,11 +525,7 @@ async def apply_chat_template(data: ChatCompletionRequest):
 
         raise HTTPException(400, error_message) from exc
     except TemplateError as exc:
-        # The template rejected the request (e.g. an unsupported reasoning_effort),
-        # which is a client error rather than a server fault, so no traceback
-        error_message = handle_request_error(
-            f"TemplateError: {str(exc)}", exc_info=False
-        ).error.message
+        error_message = handle_request_error(f"TemplateError: {str(exc)}").error.message
 
         raise HTTPException(400, error_message) from exc
 
@@ -552,7 +533,7 @@ async def apply_chat_template(data: ChatCompletionRequest):
 def _parse_tool_calls(
     text: str,
     tool_format: str,
-    label: str,
+    request_id: str,
 ) -> list:
     """
     Parse collected tool calls and convert to OAI format.
@@ -568,10 +549,10 @@ def _parse_tool_calls(
     dumped = [p.model_dump(mode="json") for p in parsed]
 
     if len(parsed):
-        num = len(parsed)
         xlogger.info(
-            f"{label}: parsed {num} tool call{'' if num == 1 else 's'} ({tool_format})",
+            f"Parsed {len(parsed)} tool calls in chat completion request {request_id}",
             {"tool_format": tool_format, "parsed": parsed, "dumped": dumped},
+            details=f"(format={tool_format})",
         )
     return dumped
 
@@ -629,7 +610,6 @@ async def _chat_stream_collector(
     mm_embeddings: Optional[MultimodalEmbeddingWrapper] = None,
     streaming_mode: bool = True,
     disconnect_handler: DisconnectHandler = None,
-    label: Optional[str] = None,
 ):
     """
     Starts a request on the backend and collects generations while tracking phase, for a single
@@ -645,7 +625,6 @@ async def _chat_stream_collector(
     """
 
     mc = model.container
-    label = label or f"request {request_id}"
     full_reasoning = ""
     full_content = ""
     full_tool = ""
@@ -712,7 +691,6 @@ async def _chat_stream_collector(
             filter_trigger=(
                 mc.reasoning_end_token if use_think and start_in_reasoning_mode else None
             ),
-            label=label,
         )
         generation = {"index": task_idx}
         async for generation in new_generation:
@@ -781,7 +759,7 @@ async def _chat_stream_collector(
                 generation["delta_tool_calls"] = ""
                 if finish_reason and full_tool:
                     generation["delta_tool_calls"] = _parse_tool_calls(
-                        full_tool, tool_format, label
+                        full_tool, tool_format, request_id
                     )
                     generation["finish_reason"] = "tool_calls"
                 await gen_queue.put(generation)
@@ -797,7 +775,7 @@ async def _chat_stream_collector(
                 generation["logprob_response"] = ChatCompletionLogprobs(content=collected_logprobs)
             generation["reasoning_content"] = full_reasoning
             generation["content"] = full_content if has_content else None
-            generation["tool_calls"] = _parse_tool_calls(full_tool, tool_format, label)
+            generation["tool_calls"] = _parse_tool_calls(full_tool, tool_format, request_id)
             if full_tool:
                 generation["finish_reason"] = "tool_calls"
             return generation
@@ -826,10 +804,9 @@ async def stream_generate_chat_completion(
     return_usage = data.stream_options and data.stream_options.include_usage
 
     try:
-        xlogger.debug(
-            f"{request_tag(request)} chat completion (stream) payload, ID {request.state.id}",
+        xlogger.info(
+            f"Received chat completion streaming request {request.state.id}",
             {
-                "request_id": request.state.id,
                 "prompt": prompt,
                 "data": data.model_dump(mode="json"),
                 "model_path": str(model_path),
@@ -858,7 +835,6 @@ async def stream_generate_chat_completion(
                     mm_embeddings=embeddings,
                     streaming_mode=True,
                     disconnect_handler=disconnect_handler,
-                    label=_gen_label(request, "chat/completions", data.n, idx, True),
                 )
             )
             gen_tasks.append(gen_task)
@@ -902,7 +878,7 @@ async def stream_generate_chat_completion(
 
             # Check if all tasks are completed
             if all(task.done() for task in gen_tasks) and gen_queue.empty():
-                xlogger.debug(f"{request_tag(request)} chat completion stream finished")
+                xlogger.info(f"Finished chat completion streaming request {request.state.id}")
                 yield "[DONE]"
                 break
 
@@ -932,10 +908,9 @@ async def generate_chat_completion(
     return_usage = data.stream_options and data.stream_options.include_usage
 
     try:
-        xlogger.debug(
-            f"{request_tag(request)} chat completion payload, ID {request.state.id}",
+        xlogger.info(
+            f"Received chat completion request {request.state.id}",
             {
-                "request_id": request.state.id,
                 "prompt": prompt,
                 "data": data.model_dump(mode="json"),
                 "model_path": str(model_path),
@@ -960,7 +935,6 @@ async def generate_chat_completion(
                     mm_embeddings=embeddings,
                     streaming_mode=False,
                     disconnect_handler=disconnect_handler,
-                    label=_gen_label(request, "chat/completions", data.n, idx, False),
                 )
             )
             gen_tasks.append(gen_task)
@@ -976,7 +950,7 @@ async def generate_chat_completion(
             generations.append(r)
         response = _compose_response(request.state.id, generations, model_path.name, return_usage)
 
-        xlogger.debug(f"{request_tag(request)} chat completion finished", {"response": response})
+        xlogger.info(f"Finished chat completion request {request.state.id}", {"response": response})
         return response
 
     except CancelledError:
@@ -988,7 +962,7 @@ async def generate_chat_completion(
 
     except Exception as exc:
         error_message = handle_request_error(
-            f"{request_tag(request)} chat completion aborted. Maybe the model was unloaded? "
+            f"Chat completion {request.state.id} aborted. Maybe the model was unloaded? "
             "Please check the server console."
         ).error.message
 

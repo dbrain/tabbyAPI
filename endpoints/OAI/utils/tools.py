@@ -15,7 +15,6 @@ from endpoints.OAI.utils.toolcall_formats import (
     mistral_old,
     mistral,
     gemma4,
-    lfm2,
 )
 
 ALL_TOOLCALL_FORMATS = {
@@ -30,9 +29,6 @@ ALL_TOOLCALL_FORMATS = {
     "hy_v3": hy3,
     "laguna": glm4_5,
     "poolside_v1": glm4_5,
-    "lfm": lfm2,
-    "lfm2": lfm2,
-    "lfm2_5": lfm2,
     "minimax_m2": minimax_m2,
     "minimax_m2_1": minimax_m2,
     "minimax_m2_5": minimax_m2,

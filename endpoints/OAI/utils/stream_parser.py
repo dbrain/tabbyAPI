@@ -8,30 +8,6 @@ CONTENT = "content"
 TOOL = "tool"
 
 
-def _partial_token_len(
-    pending: str, tokens: list[str], first_chars: frozenset, max_hold: int
-) -> int:
-    """
-    Length of the longest suffix of `pending` that is a proper prefix of one of `tokens`.
-
-    Only suffixes starting with a token's first character can qualify, so scan the tail
-    for those positions (longest suffix first) instead of testing every suffix length.
-    """
-
-    limit = min(max_hold, len(pending))
-    if not limit:
-        return 0
-
-    tail = pending[-limit:]
-    for pos, ch in enumerate(tail):
-        if ch in first_chars:
-            suffix = tail[pos:]
-            for token in tokens:
-                if token.startswith(suffix):
-                    return len(suffix)
-    return 0
-
-
 class TagStreamParser:
     """
     Splits a stream of generated text into reasoning/content/tool channels by
@@ -80,7 +56,6 @@ class TagStreamParser:
         self._tags = tags
         self._tag_re = re.compile("|".join(re.escape(t) for t in tags)) if tags else None
         self._max_hold = max((len(t) - 1 for t in tags), default=0)
-        self._tag_first = frozenset(t[0] for t in tags)
 
     @property
     def in_content(self) -> bool:
@@ -123,7 +98,13 @@ class TagStreamParser:
     def _partial_tag_len(self) -> int:
         """Length of the longest pending suffix that could still become a tag."""
 
-        return _partial_token_len(self._pending, self._tags, self._tag_first, self._max_hold)
+        limit = min(self._max_hold, len(self._pending))
+        for k in range(limit, 0, -1):
+            tail = self._pending[-k:]
+            for tag in self._tags:
+                if tag.startswith(tail):
+                    return k
+        return 0
 
     def _route(self, text: str, events: list):
         """Append text to the currently active channel."""
@@ -218,7 +199,6 @@ class ChannelStreamParser:
 
         self._token_re = re.compile("|".join(re.escape(t) for t in self._TOKENS))
         self._max_hold = max(len(t) for t in self._TOKENS) - 1
-        self._token_first = frozenset(t[0] for t in self._TOKENS)
 
     @property
     def in_reasoning(self) -> bool:
@@ -277,7 +257,13 @@ class ChannelStreamParser:
     def _partial_token_len(self) -> int:
         """Length of the longest pending suffix that could still become a token."""
 
-        return _partial_token_len(self._pending, self._TOKENS, self._token_first, self._max_hold)
+        limit = min(self._max_hold, len(self._pending))
+        for k in range(limit, 0, -1):
+            tail = self._pending[-k:]
+            for token in self._TOKENS:
+                if token.startswith(tail):
+                    return k
+        return 0
 
     def _route(self, text: str, events: list):
         """Append text to the header or the currently active channel."""

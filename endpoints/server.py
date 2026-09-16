@@ -29,14 +29,11 @@ def setup_app(host: Optional[str] = None, port: Optional[int] = None):
     )
     app.add_exception_handler(ContextLengthHTTPException, context_length_exception_handler)
 
-    # Allow CORS requests from the configured origins.
-    # allow_credentials stays False: TabbyAPI authenticates with a header/query
-    # token rather than cookies, so credentialed CORS buys nothing and would make
-    # Starlette reflect an arbitrary requesting origin back instead of sending "*".
+    # ALlow CORS requests
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=config.network.allowed_origins,
-        allow_credentials=False,
+        allow_origins=["*"],
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -54,19 +51,16 @@ def setup_app(host: Optional[str] = None, port: Optional[int] = None):
     router_mapping = {"oai": OAIRouter, "kobold": KoboldRouter}
 
     # Include the OAI api by default
-    enabled_apis = []
     for server in api_servers:
         selected_server = router_mapping.get(server.lower())
 
         if selected_server:
             app.include_router(selected_server.setup())
-            enabled_apis.append(selected_server.api_name)
 
-    if host is not None:
-        logger.info(
-            f"Serving {', '.join(enabled_apis)} API on http://{host}:{port} "
-            f"(docs at http://{host}:{port}/redoc)"
-        )
+            logger.info(f"Starting {selected_server.api_name} API")
+            for path, url in selected_server.urls.items():
+                formatted_url = url.format(host=host, port=port)
+                logger.info(f"{path}: {formatted_url}")
 
     # Include core API request paths
     app.include_router(CoreRouter)
@@ -84,21 +78,23 @@ def export_openapi():
 async def start_api(host: str, port: int):
     """Isolated function to start the API server"""
 
+    # TODO: Move OAI API to a separate folder
+    logger.info(f"Developer documentation: http://{host}:{port}/redoc")
+
     # Setup app
     app = setup_app(host, port)
 
     # Get the current event loop
     loop = asyncio.get_running_loop()
 
-    uvicorn_config = uvicorn.Config(
+    config = uvicorn.Config(
         app,
         host=host,
         port=port,
         log_config=UVICORN_LOG_CONFIG,
-        access_log=config.network.access_log,
         loop=loop,
     )
-    server = uvicorn.Server(uvicorn_config)
+    server = uvicorn.Server(config)
 
     # Uvicorn owns SIGINT/SIGTERM while serving and re-raises captured
     # signals after its graceful shutdown

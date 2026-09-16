@@ -9,6 +9,9 @@ def hardware_supports_exllamav3(gpu_device_list: list[int]):
     and doesn't support ROCm.
     """
 
+    if torch.version.hip:
+        return True
+
     min_compute_capability = min(
         torch.cuda.get_device_capability(device=device_idx)[0] for device_idx in gpu_device_list
     )

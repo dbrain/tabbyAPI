@@ -5,7 +5,6 @@ from typing import Optional
 
 from common import model
 from common.networking import get_generator_error, handle_request_disconnect
-from common.model_meta import read_model_meta
 from common.tabby_config import config
 from endpoints.core.types.model import (
     ModelCard,
@@ -27,7 +26,7 @@ def get_model_list(model_path: pathlib.Path, draft_model_path: Optional[str] = N
     for path in model_path.iterdir():
         # Don't include the draft models path
         if path.is_dir() and path != draft_model_path:
-            model_card = ModelCard(id=path.name, meta=read_model_meta(path))
+            model_card = ModelCard(id=path.name)
             model_card_list.data.append(model_card)  # pylint: disable=no-member
 
     return model_card_list
@@ -42,14 +41,12 @@ async def get_current_model_list(model_type: str = "model"):
 
     current_models = []
     model_path = None
-    n_ctx = None
 
     # Make sure the model container exists
     match model_type:
         case "model":
             if model.container:
                 model_path = model.container.model_dir
-                n_ctx = model.container.max_seq_len
         case "draft":
             if model.container:
                 model_path = model.container.draft_model_dir
@@ -58,8 +55,7 @@ async def get_current_model_list(model_type: str = "model"):
                 model_path = model.embeddings_container.model_dir
 
     if model_path:
-        meta = read_model_meta(model_path, n_ctx=n_ctx, include_size=True)
-        current_models.append(ModelCard(id=model_path.name, meta=meta))
+        current_models.append(ModelCard(id=model_path.name))
 
     return ModelList(data=current_models)
 

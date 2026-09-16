@@ -1,10 +1,6 @@
 import pathlib
 from common import model
-from endpoints.OAI.types.common import (
-    CompletionTokensDetails,
-    PromptTokensDetails,
-    UsageStats,
-)
+from endpoints.OAI.types.common import UsageStats
 from common.tabby_config import config
 from common.auth import get_key_permission
 from common.logger import xlogger
@@ -25,16 +21,9 @@ def get_usage_stats(
     completion_tokens = generation.get("gen_tokens", 0)
     usage_stats = UsageStats(
         prompt_tokens=prompt_tokens,
-        prompt_tokens_details=PromptTokensDetails(
-            cached_tokens=round(generation.get("cached_tokens") or 0)
-        ),
         prompt_time=generation.get("prompt_time"),
         prompt_tokens_per_sec=generation.get("prompt_tokens_per_sec"),
         completion_tokens=completion_tokens,
-        completion_tokens_details=CompletionTokensDetails(
-            accepted_prediction_tokens=generation.get("draft_accept") or 0,
-            rejected_prediction_tokens=generation.get("draft_reject") or 0,
-        ),
         completion_time=generation.get("gen_time"),
         completion_tokens_per_sec=generation.get("gen_tokens_per_sec"),
         total_tokens=prompt_tokens + completion_tokens,
@@ -57,22 +46,11 @@ def aggregate_usage_stats(usage_stats_list: list[UsageStats]) -> UsageStats:
     total_tokens = prompt_tokens + completion_tokens
     total_time = prompt_time + completion_time
 
-    # n > 1 generations share one prompt, so prompt-side details come from the
-    # first entry while generation-side counters accumulate
     usage_stats = UsageStats(
         prompt_tokens=prompt_tokens,
-        prompt_tokens_details=usl[0].prompt_tokens_details,
         prompt_time=prompt_time,
         prompt_tokens_per_sec=prompt_tokens_per_sec,
         completion_tokens=completion_tokens,
-        completion_tokens_details=CompletionTokensDetails(
-            accepted_prediction_tokens=sum(
-                us.completion_tokens_details.accepted_prediction_tokens for us in usl
-            ),
-            rejected_prediction_tokens=sum(
-                us.completion_tokens_details.rejected_prediction_tokens for us in usl
-            ),
-        ),
         completion_time=completion_time,
         completion_tokens_per_sec=completion_tokens_per_sec,
         total_tokens=total_tokens,
@@ -147,28 +125,14 @@ async def load_inline_model(model_name: str, request: Request):
     model_path = pathlib.Path(config.model.model_dir)
     model_path = model_path / model_name
 
-    # A request that names a model it can't get must fail rather than run on
-    # whatever happens to be loaded: the client asked for a specific model, and
-    # an answer from a different one is wrong in a way it cannot detect
+    # Model path doesn't exist
     if not model_path.exists():
-        error_message = handle_request_error(
-            f"Model {model_name} was not found in the model directory.",
-            exc_info=False,
-        ).error.message
+        xlogger.warning(f"Could not find model path {str(model_path)}. Skipping inline model load.")
 
-        raise HTTPException(404, error_message)
+        return
 
     # Load the model and also add draft dir
-    try:
-        await model.load_model(
-            model_path,
-            draft_model=config.draft_model.model_dump(include={"draft_model_dir"}),
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        error_message = handle_request_error(
-            f"Model {model_name} failed to load: {exc}"
-        ).error.message
-
-        raise HTTPException(503, error_message) from exc
+    await model.load_model(
+        model_path,
+        draft_model=config.draft_model.model_dump(include={"draft_model_dir"}),
+    )

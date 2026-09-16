@@ -96,15 +96,15 @@ penalty_range:
   override: -1
   force: false
 
-# MARK: DRY (dry_multiplier 0 disables)
+# MARK: DRY
 dry_multiplier:
   override: 0.0
   force: false
 dry_base:
-  override: 1.75
+  override: 0.0
   force: false
 dry_allowed_length:
-  override: 2
+  override: 0
   force: false
 dry_range:
   override: 0

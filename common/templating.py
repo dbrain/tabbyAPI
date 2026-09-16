@@ -39,26 +39,21 @@ def _raise_exception(message):
     raise TemplateError(message)
 
 
-def _tojson_compat(value, ensure_ascii=False, indent=None, separators=None, sort_keys=False):
-    """JSON filter for chat templates, matching the transformers environment.
+def _tojson_compat(value, indent=None, ensure_ascii=True):
+    """Compatibility JSON filter for chat templates.
 
-    Jinja's built-in ``tojson`` only takes ``indent``, HTML-escapes ``<``, ``>``,
-    ``&`` and ``'`` into unicode escapes, sorts keys and returns ``Markup``, so
-    templates calling ``tojson(ensure_ascii=False)`` fail on it and the ones that
-    don't render text the model never saw in training. This filter has the same
-    signature and defaults as the one transformers installs, so a template renders
-    the same bytes here as under transformers or vLLM: raw UTF-8 (escaping
-    non-ASCII text such as Chinese tool descriptions into ``\\uXXXX`` inflates
-    token counts several-fold), ``json.dumps`` default separators, insertion key
-    order, and a plain string return (autoescape is off, and a ``Markup`` value
-    would HTML-escape any plain string a template concatenates with it).
+    Some model templates call ``tojson(ensure_ascii=False)`` while the
+    bundled Jinja filter may not accept that keyword in sandboxed mode.
+
+    Returns a plain string, matching the transformers template environment:
+    autoescape is off, and a Markup return value would HTML-escape any plain
+    string a template concatenates with the filter's output.
     """
     return json.dumps(
         value,
-        ensure_ascii=ensure_ascii,
         indent=indent,
-        separators=separators,
-        sort_keys=sort_keys,
+        ensure_ascii=ensure_ascii,
+        separators=(",", ": "),
     )
 
 
@@ -220,6 +215,8 @@ def find_template_from_model(model_path: pathlib.Path):
 
 async def find_prompt_template(template_name, model_dir: pathlib.Path):
     """Tries to find a prompt template using various methods."""
+
+    xlogger.info("Attempting to load a prompt template if present.")
 
     find_template_functions = [
         lambda: PromptTemplate.from_file(model_dir / "chat_template.jinja"),

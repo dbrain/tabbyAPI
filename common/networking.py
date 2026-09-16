@@ -1,7 +1,6 @@
 """Common utility functions"""
 
 import asyncio
-import itertools
 import json
 import socket
 import traceback
@@ -141,10 +140,10 @@ class DisconnectHandler:
 
         # Log and raise
         if not self._reported:
-            xlogger.warning(f"{self.description}: client disconnected, generation cancelled")
+            xlogger.error(f"Request disconnected: {self.description}")
             self._reported = True
 
-        raise asyncio.CancelledError(f"{self.description}: client disconnected")
+        raise asyncio.CancelledError(f"Request disconnected: {self.description}")
 
     async def add_cleanup_task(self, key, func, args):
         # Intentionally strict
@@ -205,29 +204,17 @@ def is_port_in_use(port: int) -> bool:
         return test_socket.connect_ex(("localhost", port)) == 0
 
 
-# Short per-process serial for console log lines; the UUID stays the API-facing id
-_request_serials = itertools.count(1)
-
-
 async def add_request_id(request: Request):
-    """FastAPI depends to add a UUID and a console serial to a request's state."""
+    """FastAPI depends to add a UUID to a request's state."""
 
     request.state.id = uuid4().hex
-    request.state.serial = next(_request_serials)
     return request
-
-
-def request_tag(request: Request) -> str:
-    """Short tag identifying a request in console logs, e.g. "#12"."""
-
-    serial = getattr(request.state, "serial", None)
-    return f"#{serial}" if serial is not None else f"#{request.state.id[:8]}"
 
 
 async def log_request(request: Request):
     """FastAPI depends to log a request to the user."""
 
-    log_message = [f"{request_tag(request)} {request.method} request (ID {request.state.id}):"]
+    log_message = [f"Information for {request.method} request {request.state.id}:"]
 
     log_message.append(f"URL: {request.url}")
     log_message.append(f"Headers: {dict(request.headers)}")

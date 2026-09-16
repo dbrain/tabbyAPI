@@ -2,7 +2,6 @@ import asyncio
 import gc
 import pathlib
 import re
-import time
 from asyncio import CancelledError
 
 import torch
@@ -27,29 +26,25 @@ from backends.exllamav3.grammar import ExLlamaV3Grammar
 
 from backends.exllamav3.sampler import ExllamaV3SamplerBuilder
 from backends.exllamav3.utils import exllama_supports_nccl
-from backends.exllamav3.vision import clear_image_embedding_cache, image_embedding_cache
+from backends.exllamav3.vision import clear_image_embedding_cache
 from common.concurrency import iterate_in_threadpool
 from common.gen_logging import (
-    format_settings,
     log_generation_params,
     log_metrics,
     log_prompt,
-    log_request_start,
 )
 from common.hardware import hardware_supports_exllamav3
 from common.health import HealthManager
 from common.errors import ContextLengthExceededError, validate_context_requirements
 from common.logger import xlogger
-from common.model_meta import read_model_meta
 from common.multimodal import MultimodalEmbeddingWrapper
 from common.networking import DisconnectHandler
 from common.optional_dependencies import check_package_version
 from common.sampling import BaseSamplerRequest
-from common.status_display import status_display
 from common.tabby_config import config
 from common.templating import PromptTemplate, find_prompt_template
 from common.transformers_utils import HFModel
-from common.utils import unwrap
+from common.utils import coalesce, unwrap
 from endpoints.OAI.types.chat_completion import ChatCompletionLogprob, ChatCompletionLogprobLeaf
 from endpoints.core.types.model import ModelCard, ModelCardParameters
 from endpoints.OAI.utils.tools import is_supported_format
@@ -179,7 +174,7 @@ class ExllamaV3Container:
         self = cls()
 
         # Make sure ExllamaV3 is up to date
-        check_package_version("exllamav3", "1.4.7")
+        check_package_version("exllamav3", "1.4.6")
 
         self.model_dir = model_directory
         self.hf_model = hf_model
@@ -228,7 +223,6 @@ class ExllamaV3Container:
                 self.vision_model = Model.from_config(self.config, component="vision")
                 if self.config.infer_params.vision_pinned:
                     xlogger.info("Keeping vision model weights in system RAM (vision_offload).")
-                image_embedding_cache.configure(config.memory.sysmem_multimodal_cache)
             else:
                 xlogger.warning(
                     "The provided model does not have vision capabilities that are "
@@ -358,22 +352,22 @@ class ExllamaV3Container:
         max_seq_len_default = 8192
 
         if max_seq_len_model and not max_seq_len_user:
-            max_seq_len_source = "model default"
+            xlogger.info(f"Using default max_seq_len from model: {max_seq_len_model} tokens.")
             max_seq_len = max_seq_len_model
         elif max_seq_len_user:
-            max_seq_len_source = "configured"
+            xlogger.info(f"Using configured max_seq_len: {max_seq_len_user} tokens.")
             max_seq_len = max_seq_len_user
         else:
             xlogger.warning(
                 f"max_seq_len is undefined. Defaulting to {max_seq_len_default} tokens."
             )
             max_seq_len = max_seq_len_default
-            max_seq_len_source = "fallback"
 
         cache_size_user = kwargs.get("cache_size")
         cache_size_default = max_seq_len
 
         if cache_size_user:
+            xlogger.info(f"Using configured cache_size: {cache_size_user} tokens.")
             cache_size = cache_size_user
         else:
             xlogger.warning(
@@ -391,11 +385,6 @@ class ExllamaV3Container:
 
         self.max_seq_len = max_seq_len
         self.cache_size = cache_size
-
-        xlogger.info(
-            f"Context: max_seq_len {max_seq_len:,} tokens ({max_seq_len_source}), "
-            f"cache_size {cache_size:,} tokens"
-        )
 
         # Max batch size
         default_mbs = 4 if self.model.caps.get("recurrent_states") else 128
@@ -663,7 +652,6 @@ class ExllamaV3Container:
         model_card = ModelCard(
             id=self.model_dir.name,
             parameters=model_params,
-            meta=read_model_meta(self.model_dir, n_ctx=self.max_seq_len, include_size=True),
         )
 
         return model_card
@@ -725,7 +713,6 @@ class ExllamaV3Container:
             # Wait for existing generation jobs to finish
             await self.wait_for_jobs(kwargs.get("skip_wait"))
 
-            load_start = time.perf_counter()
             generator = self.load_model_sync(progress_callback)
             async for value in iterate_in_threadpool(generator):
                 yield value
@@ -740,7 +727,7 @@ class ExllamaV3Container:
 
             # Cleanup and update model load state
             self.loaded = True
-            xlogger.info(f"Model loaded in {time.perf_counter() - load_start:.1f} s")
+            xlogger.info("Model successfully loaded.")
         finally:
             self.load_lock.release()
 
@@ -767,14 +754,14 @@ class ExllamaV3Container:
                 if value:
                     yield value
 
-        if self.use_tp:
-            split_mode = "tensor parallel"
-        elif self.gpu_split_auto:
-            split_mode = "autosplit"
-        else:
-            split_mode = "manual GPU split"
+        xlogger.info("Loading model: " + str(self.model_dir))
 
-        xlogger.info(f"Loading model {self.model_dir} ({split_mode})")
+        if self.use_tp:
+            xlogger.info("Loading with tensor parallel")
+        elif self.gpu_split_auto:
+            xlogger.info("Loading with autosplit")
+        else:
+            xlogger.info("Loading with a manual GPU split (or a one GPU setup)")
 
         for value in self.model.load_gen(
             tensor_p=self.use_tp,
@@ -799,15 +786,6 @@ class ExllamaV3Container:
                 # Immediately cancel all jobs
                 await self.wait_for_jobs(skip_wait=True)
 
-                # Retire the previous generator before replacing it. Cancelling the
-                # jobs alone leaves its iteration task alive, parked on an emptied
-                # job condition that nothing will ever signal again, which keeps the
-                # old sync Generator reachable for the life of the process. close()
-                # stops the task and wakes any consumer still parked on a job queue.
-                # After a latch the task has already exited, so this is a no-op there.
-                if self.generator is not None:
-                    await self.generator.close()
-
             # Create new generator
             self.generator = AsyncGenerator(
                 model=self.model,
@@ -819,6 +797,13 @@ class ExllamaV3Container:
                 max_chunk_size=self.chunk_size,
                 recurrent_cache_size=config.memory.sysmem_recurrent_cache * 1024**2,
                 cpu_cache_size=config.memory.sysmem_kv_cache * 1024**2,
+                disk_cache_dir=config.memory.disk_kv_cache_dir,
+                disk_cache_size=config.memory.disk_kv_cache * 1024**2,
+                disk_checkpoint_size=(
+                    config.memory.disk_recurrent_cache * 1024**2
+                    if config.memory.disk_recurrent_cache
+                    else None
+                ),
                 num_draft_tokens=self.draft_num_tokens,
                 dynamic_draft_tokens=self.dynamic_draft,
                 ngram_match_min=self.ngram_match_min,
@@ -859,6 +844,11 @@ class ExllamaV3Container:
 
                 # Wait for other jobs to finish
                 await self.wait_for_jobs(kwargs.get("skip_wait"))
+
+            # Persist the durable K/V tier while the cache tensors still exist. The in-session sweeps are
+            # bounded so they never delay a request, which leaves the tail of a just-finished context unwritten
+            if self.generator is not None:
+                self.generator.generator.flush_disk_cache()
 
             # Clear the image embedding cache
             clear_image_embedding_cache()
@@ -1065,7 +1055,6 @@ class ExllamaV3Container:
         disconnect_handler: DisconnectHandler = None,
         mm_embeddings: Optional[MultimodalEmbeddingWrapper] = None,
         filter_trigger: str = None,
-        label: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Generates a response iteratively (streaming) for a given prompt.
@@ -1078,7 +1067,6 @@ class ExllamaV3Container:
             mm_embeddings: Optional multimodal embeddings.
             filter_trigger: Delay filters (from params) until trigger text.
                 Must map to single token.
-            label: Short name for the request in console logs.
 
         Yields:
             Generation chunks
@@ -1107,7 +1095,6 @@ class ExllamaV3Container:
                 disconnect_handler=disconnect_handler,
                 mm_embeddings=mm_embeddings,
                 filter_trigger=filter_trigger,
-                label=label,
             ):
                 yield generation_chunk
         finally:
@@ -1195,11 +1182,8 @@ class ExllamaV3Container:
 
         generation["logprobs_content"] = content
 
-    def handle_finish_chunk(
-        self, result: dict, request_id: str, full_text: str, label: Optional[str] = None
-    ):
+    def handle_finish_chunk(self, result: dict, request_id: str, full_text: str):
         eos_reason = result.get("eos_reason")
-        label = label or f"request {request_id}"
 
         stop_str = None
         if eos_reason == "max_new_tokens":
@@ -1213,7 +1197,7 @@ class ExllamaV3Container:
                 stop_str = result.get("eos_triggering_string")
             elif eos_reason == "loop_detected":
                 xlogger.warning(
-                    f"{label}: generation stopped because a token loop was detected",
+                    f"Generation stopped because a token loop was detected, ID: {request_id}",
                     {
                         "request_id": request_id,
                         "eos_reason": eos_reason,
@@ -1274,50 +1258,6 @@ class ExllamaV3Container:
 
         return finish_chunk
 
-    def _generator_latched(self) -> bool:
-        """
-        Whether the async generator is unusable. exllamav3 sets AsyncGenerator.error when
-        an exception escapes Generator.iterate(), which kills the iteration task for every
-        job. Errors it contains per job (reap_failed_job) never set it. A wrapper without
-        the attribute can't be inspected, so it is treated as latched to keep the historical
-        always-recreate behaviour.
-        """
-
-        return (
-            self.generator is None
-            or not hasattr(self.generator, "error")
-            or self.generator.error is not None
-        )
-
-    async def _recover_from_generation_error(self, ex: Exception, job):
-        """
-        Handle an exception raised while consuming a job. Recreating the generator cancels
-        every other in-flight request (wait_for_jobs), whose clients then get partial or
-        empty completions with HTTP 200, so that only happens when the generator actually
-        latched. A contained error leaves the generator healthy; the failed job is cancelled
-        in case the error came from this consumer rather than the engine, so it doesn't keep
-        generating into a queue nobody drains (cancel is a no-op for a job the engine reaped).
-        """
-
-        if self._generator_latched():
-            xlogger.error(
-                "FATAL ERROR with generation. "
-                "Attempting to recreate the generator. "
-                "If this fails, please restart the server.\n",
-                {"exception": str(ex)},
-            )
-            asyncio.ensure_future(self.create_generator())
-
-            await HealthManager.add_unhealthy_event(ex)
-        else:
-            xlogger.warning(
-                "Generation failed; error was contained to this request and the "
-                "generator is still healthy.",
-                {"exception": str(ex)},
-            )
-            if not job.cancelled:
-                await job.cancel()
-
     async def generate_gen(
         self,
         request_id: str,
@@ -1326,7 +1266,6 @@ class ExllamaV3Container:
         disconnect_handler: DisconnectHandler = None,
         mm_embeddings: Optional[MultimodalEmbeddingWrapper] = None,
         filter_trigger: str = None,
-        label: Optional[str] = None,
     ):
         """
         Create generator function for prompt completion.
@@ -1334,19 +1273,77 @@ class ExllamaV3Container:
         for kwargs, check common/sampling.py
         """
         chunk_tokens: torch.Tensor | tuple[torch.Tensor, torch.Tensor]
-        label = label or f"request {request_id}"
 
         xlogger.debug(
             f"Starting generation, ID: {request_id}",
             {"request_id": request_id, "params": params.model_dump(mode="json")},
         )
 
-        # Build the sampler stack. Greedy if temperature is 0
-        sampler_builder = ExllamaV3SamplerBuilder.from_params(
-            params, self.tokenizer, self.max_seq_len
+        sampler_builder = ExllamaV3SamplerBuilder()
+
+        # Apply logit bias first so it lands ahead of the other steps
+        if params.logit_bias:
+            sampler_builder.logit_bias(params.logit_bias)
+
+        # Penalties
+
+        # Set penalty range
+        penalty_range = unwrap(params.penalty_range, self.max_seq_len)
+
+        # Exl3's version of including the entire context
+        if penalty_range < 0:
+            penalty_range = int(10e7)
+
+        # Always make sure the fallback is 0 if range < 0
+        # It's technically fine to use -1, but this just validates the passed
+        # fallback
+        # Always default to 0 if something goes wrong
+        if params.penalty_range < 0:
+            fallback_decay = 0
+        else:
+            fallback_decay = params.penalty_range
+
+        repetition_decay = coalesce(params.repetition_decay, fallback_decay, 0)
+
+        # Apply penalties to builder
+        sampler_builder.penalties(
+            params.repetition_penalty,
+            params.frequency_penalty,
+            params.presence_penalty,
+            penalty_range,
+            max(
+                repetition_decay, 1
+            ),  # TODO: Allow decay = 0 when exl3 kernel fix is pushed (v0.0.27)
         )
+
+        # Ban tokens
+        if params.banned_tokens:
+            sampler_builder.ban_tokens(params.banned_tokens)
+
+        # Apply temperature first to builder
+        if not params.temperature_last:
+            sampler_builder.temperature(params.temperature)
+
+        # Apply alphabet samplers to builder
+        sampler_builder.top_k(params.top_k)
+        sampler_builder.top_p(params.top_p)
+        sampler_builder.min_p(params.min_p)
+
+        # Apply temperature last to builder
+        if params.temperature_last:
+            sampler_builder.temperature(params.temperature)
+
+        # Apply XTC to the final distribution
+        if params.xtc_probability > 0.0:
+            sampler_builder.xtc(params.xtc_probability, params.xtc_threshold, self.tokenizer)
+
+        # Apply adaptive-P
+        if params.adaptive_target < 1.0:
+            sampler_builder.adaptive_p(params.adaptive_target, params.adaptive_decay)
+
+        # Build the sampler
+        # Set greedy if temperature is 0
         sampler = sampler_builder.build(params.temperature == 0)
-        settings = list(sampler_builder.settings)
 
         # Dynamically scale penalty range to output tokens
         # Only do this if freq/pres pen is enabled
@@ -1413,7 +1410,7 @@ class ExllamaV3Container:
         # Log prompt to console. Add the BOS token if specified
         log_prompt(
             f"{self.tokenizer.bos_token if add_bos_token else ''}{prompt}",
-            label,
+            request_id,
         )
 
         if params.json_schema or params.regex_pattern or params.grammar_string:
@@ -1442,43 +1439,6 @@ class ExllamaV3Container:
                     params.grammar_string, self.tokenizer, trigger_token_id=trigger_token_id
                 )
 
-        # Generation controls, listed after the sampler settings
-        if params.max_tokens:
-            settings.append(("max_tokens", max_tokens))
-        else:
-            settings.append(("max_tokens", (max_tokens, "auto")))
-        if params.min_tokens:
-            settings.append(("min_tokens", params.min_tokens))
-        # Templates add their own stop strings; only report the client's
-        if params.stop and params.param_source("stop") != "default":
-            settings.append(("stop", f"{len(params.stop)} sequences"))
-        if params.banned_strings:
-            settings.append(("banned_strings", f"{len(params.banned_strings)} strings"))
-        if params.json_schema:
-            settings.append(("json_schema", True))
-        if params.regex_pattern:
-            settings.append(("regex_pattern", True))
-        if params.grammar_string:
-            settings.append(("grammar_string", True))
-        if params.token_healing:
-            settings.append(("token_healing", True))
-        if params.logprobs or params.top_logprobs:
-            settings.append(("logprobs", max(params.logprobs or 0, params.top_logprobs or 0)))
-        if params.param_source("loop_detect_window") != "default":
-            settings.append(("loop_detect_window", params.loop_detect_window))
-
-        settings_text = format_settings(settings, params)
-        log_request_start(
-            label,
-            context_len,
-            settings_text,
-            {
-                "request_id": request_id,
-                "prompt_tokens": context_len,
-                "settings": {name: str(value) for name, value in settings},
-            },
-        )
-
         generation = {}
         job = AsyncJob(
             self.generator,
@@ -1499,7 +1459,6 @@ class ExllamaV3Container:
         )
         self.active_job_ids[request_id] = job
         await disconnect_handler.add_cleanup_task(id(job), job.cancel, ())
-        job_status = status_display.add_job(request_id, label, context_len)
 
         generated_tokens = 0
         full_response = ""
@@ -1509,12 +1468,6 @@ class ExllamaV3Container:
         try:
             async for result in job:
                 await disconnect_handler.poll()
-
-                stage = result.get("stage")
-                if stage == "started":
-                    job_status.started(result.get("cached_tokens", 0))
-                elif stage == "prefill":
-                    job_status.prefill(result.get("curr_progress", 0))
 
                 # The generator can produce several results per iteration
                 # (speculative decoding), while this consumer may only get one
@@ -1578,14 +1531,11 @@ class ExllamaV3Container:
                     if params.logprobs > 0:
                         self.handle_logprobs(result, generation)
 
-                    job_status.generated(generated_tokens)
                     yield generation
 
                 if result.get("eos"):
                     xlogger.debug("EOS result received from generator", result)
-                    finish_chunk = self.handle_finish_chunk(
-                        result, request_id, full_response, label
-                    )
+                    finish_chunk = self.handle_finish_chunk(result, request_id, full_response)
                     await disconnect_handler.finish(id(job))
 
                     # Save the final result for metrics logging
@@ -1599,7 +1549,17 @@ class ExllamaV3Container:
                 await job.cancel()
 
         except Exception as ex:
-            await self._recover_from_generation_error(ex, job)
+            # Create a new generator since the current state is broken
+            # No need to wait for this to finish
+            xlogger.error(
+                "FATAL ERROR with generation. "
+                "Attempting to recreate the generator. "
+                "If this fails, please restart the server.\n",
+                {"exception": str(ex)},
+            )
+            asyncio.ensure_future(self.create_generator())
+
+            await HealthManager.add_unhealthy_event(ex)
 
             if isinstance(ex, AssertionError) and "cannot be enqueued" in str(ex):
                 raise ContextLengthExceededError(
@@ -1608,12 +1568,9 @@ class ExllamaV3Container:
 
             raise ex
         finally:
-            status_display.remove_job(request_id)
-
             # Log generation options to console
             # Some options are too large, so log the args instead
             log_generation_params(
-                label,
                 request_id=request_id,
                 bos_token_id=self.tokenizer.bos_token_id,
                 eos_token_id=eos_tokens,
@@ -1625,7 +1582,7 @@ class ExllamaV3Container:
             # Log the metrics if present
             if metrics_result:
                 log_metrics(
-                    label,
+                    request_id,
                     metrics_result,
                     context_len,
                     self.max_seq_len,

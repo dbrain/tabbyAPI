@@ -17,17 +17,8 @@ network:
 
   # Disable HTTP token authentication with requests.
   # WARNING: This will make your instance vulnerable!
-  # Only turn this on if nothing but trusted local clients can reach the API.
-  # Note that web pages open in a browser on this machine also count as local
-  # callers; restrict allowed_origins below if you disable auth.
+  # Turn on this option if you are ONLY connecting from localhost.
   disable_auth: false
-
-  # Origins allowed to call the API from a browser (default: ["*"]).
-  # This is a CORS allowlist, not authentication: "*" lets any site open in your
-  # browser send requests to this instance, which matters most when disable_auth
-  # is on. Restrict to your own frontends (e.g. ["http://localhost:8000"]) or use
-  # an empty list [] to block all browser (cross-origin) callers.
-  allowed_origins: ["*"]
 
   # Disable fetching external content in response to requests,such as images from URLs.
   disable_fetch_requests: false
@@ -45,10 +36,6 @@ network:
   # connections from dropping during long prefills. Set to 0 to disable.
   sse_ping_interval: 15
 
-  # Log every HTTP request with client address, method, path and status (default: False).
-  # Generation requests are already logged in detail; this adds the rest, such as model list and health polls.
-  access_log: false
-
 # Options for logging
 logging:
   # Enable prompt logging (default: False).
@@ -60,14 +47,6 @@ logging:
   # Enable request logging (default: False).
   # NOTE: Only use this for debugging!
   log_requests: false
-
-  # Show a live status line below the log with cache usage and in-flight jobs (default: True).
-  # Only shown on an interactive terminal.
-  log_live_status: true
-
-  # Prefix console log lines with the time of day (default: True).
-  # The log files under logs/ always carry full timestamps.
-  log_timestamps: true
 
   # Write every /v1/chat/completions request to logs/debug/ as JSON (default: False).
   # Also saves the fully templated prompt (the exact text sent to the tokenizer)
@@ -86,9 +65,8 @@ model:
   model_dir: models
 
   # Allow direct loading of models from a completion or chat completion request (default: False).
-  # This method of loading is strict: a request naming a model that doesn't exist or fails to load
-  # is rejected instead of running on the loaded model. Enable dummy models to add exceptions for
-  # model names that clients send without meaning a specific model.
+  # This method of loading is strict by default.
+  # Enable dummy models to add exceptions for invalid model names.
   inline_model_loading: false
 
   # Sends dummy model names when the models endpoint is queried. (default: False)
@@ -335,7 +313,7 @@ sampling:
   # Find this in the sampler-overrides folder.
   # This overrides default fallbacks for sampler values that are passed to the API.
   # NOTE: safe_defaults is noob friendly and provides fallbacks for frontends that don't send sampling parameters.
-  # for frontends that don't send sampling parameters. Leaving this blank means no fallbacks at all.
+  # Remove this for any advanced usage.
   override_preset: safe_defaults
 
 # Options for Loras
@@ -374,17 +352,28 @@ memory:
   # Size of system memory second-tier K/V cache, in MB (default: 0)
   sysmem_kv_cache: 0
 
-  # Size of the image embedding cache in system memory, in MB (default: 1024).
-  # Encoded images are kept so repeated turns of a conversation don't re-run the vision model.
-  # Images already in use by a request are never evicted; a context whose images exceed the
-  # budget is cached only partially, with a warning. Only applies when vision is enabled.
-  sysmem_multimodal_cache: 1024
+  # Directory for a durable third-tier K/V cache (default: None, disabled).
+  # Prompt cache entries and, on hybrid models, the recurrent checkpoints that
+  # make them resumable are written here and survive a restart, so a returning
+  # conversation is read back from disk instead of re-prefilled. Requires
+  # sysmem_kv_cache, since disk records are paged in through the system memory
+  # tier. Entries are scoped by a fingerprint of the model files and cache
+  # layout, so a store written by a different model or build is ignored, never
+  # reinterpreted.
+  disk_kv_cache_dir:
 
-  # Use the cudaMallocAsync allocator backend in Torch (default: False).
-  # When False, the allocator is left to the environment: unless PYTORCH_CUDA_ALLOC_CONF is set,
-  # ExLlamaV3 enables expandable segments in Torch's native allocator, which performs better
-  # than cudaMallocAsync. Enable this to force the cudaMallocAsync backend instead.
-  cuda_malloc_async: false
+  # Size of the durable third-tier K/V cache, in MB (default: 0)
+  disk_kv_cache: 0
+
+  # Size of the durable recurrent checkpoint store, in MB
+  # (default: 0, meaning one eighth of disk_kv_cache)
+  disk_recurrent_cache: 0
+
+  # Use cudaMallocAsync backend in Torch (default: True).
+  # Enabling this is generally preferable, but it may cause issues with certain
+  # workloads. Try disabling it if you experience intermittent OoM errors. If
+  # False, Torch will use the allocator defined by the system env
+  cuda_malloc_async: True
 
 # Options for development and experimentation
 developer:
