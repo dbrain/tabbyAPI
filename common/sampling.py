@@ -311,9 +311,10 @@ class BaseSamplerRequest(BaseModel):
 
     grammar_string: Optional[str] = Field(
         default_factory=lambda: get_default_sampler_value("grammar_string"),
+        validation_alias=AliasChoices("grammar_string", "grammar"),
         description=(
-            "Constrain generation with a context-free grammar in Lark or "
-            "llama.cpp GBNF syntax (auto-detected)."
+            "Aliases: grammar. Constrain generation with a context-free "
+            "grammar in Lark or llama.cpp GBNF syntax (auto-detected)."
         ),
     )
 
