@@ -109,6 +109,7 @@ class DraftModelLoadRequest(_WarnOnUnknownFields):
         gt=0,
         lt=1,
     )
+    draft_policy: Optional[Literal["default", "tier"]] = None
     ngram_match_min: Optional[int] = None
     hybrid_draft_tokens: Optional[int] = None
     draft_rope_scale: Optional[float] = None

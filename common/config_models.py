@@ -706,6 +706,16 @@ class DraftModelConfig(BaseConfigModel):
         gt=0,
         lt=1,
     )
+    draft_policy: Optional[Literal["default", "tier"]] = Field(
+        "default",
+        description=(
+            "Draft length policy for MTP drafting (default: default).\n"
+            "default: the engine's own (fixed draft_num_tokens, or dynamic_draft).\n"
+            "tier: per-round depth from the drafter's top-1 probabilities (up to\n"
+            "draft_num_tokens, stricter beyond 3 drafts) plus a long n-gram copy\n"
+            "from the context. Replaces dynamic_draft. Needs draft_mode mtp."
+        ),
+    )
     ngram_match_min: Optional[int] = Field(
         2,
         description=(

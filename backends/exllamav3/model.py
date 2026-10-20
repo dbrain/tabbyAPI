@@ -190,6 +190,41 @@ def disk_cache_kwargs(memory_config) -> dict:
     }
 
 
+def resolve_draft_policy(draft_args: dict, draft_mode: str) -> str:
+    """
+    The draft_policy in effect for this load. tier drives the MTP drafter, so
+    it is off when drafting is and an error with another draft mode.
+    """
+
+    policy = unwrap(draft_args.get("draft_policy"), "default")
+    if policy == "default" or draft_mode == "disabled":
+        return "default"
+    if draft_mode != "mtp":
+        raise ValueError(f"draft_policy {policy} needs draft_mode mtp, not {draft_mode}")
+    if draft_args.get("dynamic_draft"):
+        xlogger.warning(
+            f"draft_policy {policy} sets the draft length itself; dynamic_draft is ignored."
+        )
+    return policy
+
+
+def install_draft_policy(generator, policy: str):
+    """
+    Installs the draft policy on a freshly created (sync) Generator. Returns
+    its uninstall function, or None for the engine's own policy.
+    """
+
+    if policy == "default":
+        return None
+    try:
+        from exllamav3.generator.spec_policy import install_draft_policy as install
+    except ImportError as exc:
+        raise ValueError(
+            f"draft_policy {policy} needs an exllamav3 build with exllamav3.generator.spec_policy"
+        ) from exc
+    return install(generator)
+
+
 def _describe_reasoning_settings(reasoning_params: BaseSamplerRequest) -> str:
     """The reasoning-phase overrides as "name: value (source)" items."""
 
@@ -263,6 +298,7 @@ class ExllamaV3Container:
     draft_num_tokens: Optional[int] = None
     dynamic_draft: Optional[bool] = False
     draft_confidence: float = 0.4
+    draft_policy: str = "default"
     ngram_match_min: int = 0
     hybrid_draft_tokens: int = 0
     recurrent_checkpoint_interval: Optional[int] = None
@@ -422,7 +458,10 @@ class ExllamaV3Container:
             if self.use_draft_model or self.ngram_match_min
             else None
         )
-        self.dynamic_draft = draft_args.get("dynamic_draft", False)
+        self.draft_policy = resolve_draft_policy(draft_args, draft_mode)
+        self.dynamic_draft = (
+            draft_args.get("dynamic_draft", False) and self.draft_policy == "default"
+        )
         self.draft_confidence = unwrap(draft_args.get("draft_confidence"), 0.4)
         if not 0.0 < self.draft_confidence < 1.0:
             raise ValueError("draft_confidence must be between 0 and 1")
@@ -465,6 +504,8 @@ class ExllamaV3Container:
                 xlogger.info(
                     f"Using n-gram drafting with minimum match length {self.ngram_match_min}"
                 )
+        if self.draft_policy != "default":
+            xlogger.info(f"Using draft policy {self.draft_policy}.")
         if self.hybrid_draft_tokens:
             xlogger.info(
                 f"Using hybrid drafting: {self.hybrid_draft_tokens} tokens drafted from a "
@@ -1249,6 +1290,8 @@ class ExllamaV3Container:
                 **checkpoint_kwargs,
                 **self.disk_cache_kwargs,
             )
+
+            install_draft_policy(self.generator.generator, self.draft_policy)
 
             # Update the state of the container var
             if self.max_batch_size is None:
