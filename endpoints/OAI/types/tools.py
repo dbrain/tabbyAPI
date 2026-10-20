@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Dict, Literal, Optional
+from typing import Dict, Literal, Optional, Union
 from uuid import uuid4
 
 
@@ -33,8 +33,11 @@ class Tool(BaseModel):
 
     name: str
 
-    # Makes more sense to be a dict, but OAI knows best
-    arguments: str
+    # OAI specifies a JSON string, and that is what responses emit, but many
+    # clients round-trip the parsed object back in the next request. Accept
+    # both: format_messages_with_template already normalises the string form
+    # to a dict before rendering, so an object here needs no conversion.
+    arguments: Union[str, Dict[str, object]]
 
 
 class ToolCall(BaseModel):
