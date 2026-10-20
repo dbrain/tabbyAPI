@@ -37,6 +37,7 @@ from endpoints.OAI.utils.completion import (
     stream_generate_completion,
 )
 from endpoints.OAI.utils.embeddings import get_embeddings
+from endpoints.OAI.utils.systemone import systemone_request
 
 
 api_name = "OAI"
@@ -167,6 +168,12 @@ async def chat_completion_request(
 
     except (CancelledError, InvalidStateError) as ex:
         raise HTTPException(422, "/v1/chat/completions request cancelled by user.") from ex
+
+
+# System One decisions (llama.cpp-compatible /v1/systemone); see endpoints/OAI/utils/systemone.py
+@router.post("/v1/systemone", dependencies=[Depends(check_api_key)])
+async def systemone(request: Request):
+    return await systemone_request(request)
 
 
 # Apply template endpoint (llama-server compatible)

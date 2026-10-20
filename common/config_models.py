@@ -612,6 +612,14 @@ class ModelConfig(BaseConfigModel):
         ),
     )
 
+    systemone_temperature: Optional[float] = Field(
+        1.0,
+        description=(
+            "Temperature applied to the label logits of /v1/systemone answers (default: 1.0).\n"
+            "p = softmax(logit / T) over the option labels."
+        ),
+    )
+
     _metadata: Metadata = PrivateAttr(Metadata())
     model_config = ConfigDict(protected_namespaces=())
 

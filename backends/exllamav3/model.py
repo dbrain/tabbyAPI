@@ -2,6 +2,8 @@ import asyncio
 from collections import OrderedDict
 from dataclasses import dataclass
 import gc
+import inspect
+import os
 import pathlib
 import re
 import time
@@ -905,8 +907,19 @@ class ExllamaV3Container:
         # A recurrent model's rollback window (max_history) has to cover the
         # widest verification pass a round can take, a hybrid draft included
         draft_tokens = unwrap(self.draft_num_tokens, default_draft_tokens)
+        # EXL3_SYSTEMONE_RESERVE_SLOT=1: one recurrent state slot more than max_batch_size, which the
+        # generator never hands to a regular job (it caps its batch at max_batch_size), so a score-only job
+        # never waits for a generation to finish. Costs one slot's state in VRAM (~0.6 GB across both cards
+        # for Qwen3.8-27B with a 3-token draft history)
+        from exllamav3.generator.job import Job
+
+        reserve = int(
+            os.environ.get("EXL3_SYSTEMONE_RESERVE_SLOT", "0") == "1"
+            and getattr(Job, "score_only_supported", False)
+            and self.max_batch_size is not None
+        )
         batch_draft_args = {
-            "max_batch_size": self.max_batch_size,
+            "max_batch_size": self.max_batch_size + reserve if reserve else self.max_batch_size,
             "max_history": max(draft_tokens, self.hybrid_draft_tokens),
             "recurrent_dtype": torch.float if self.recurrent_state_fp32 else torch.half,
         }
@@ -1675,6 +1688,121 @@ class ExllamaV3Container:
 
         phases.reasoning = reasoning
         return True
+
+    async def systemone_score(
+        self,
+        request_id: str,
+        input_ids: List[torch.Tensor],
+        label_ids: List[List[int]],
+        split_at: Optional[int],
+        path: str = "auto",
+        batch: bool = True,
+    ):
+        """
+        Logits of label_ids[i] at the position after prompt i, for /v1/systemone. Returns
+        ([{"logits": [float], "cached_tokens": int}], path_used).
+
+        The fast path is exllamav3's score-only job (exllamav3-patches/staging, Job.score_only):
+        one forward per uncached span, no draft, no sampling, ahead of the pending queue. The stock
+        path is an ordinary one-token generation that returns its logits; it is the fallback for an
+        exllamav3 without the score path and the reference the fast path is checked against
+        (header x-systemone-path: stock). The prompts are scored in order, so the questions after
+        the first resume from the state the first one cached.
+        """
+        from exllamav3.generator.job import Job
+
+        fast = getattr(Job, "score_only_supported", False) and path != "stock"
+
+        async with self.load_condition:
+            await self.load_condition.wait_for(lambda: not self.load_lock.locked())
+        if not self.loaded or self.generator is None:
+            raise RuntimeError("Model is being unloaded. Cannot process new requests.")
+        if self._generator_latched():
+            raise RuntimeError("the generator is not running")
+
+        keys = [f"{request_id}#{i}" for i in range(len(input_ids))]
+        jobs = []
+        try:
+            if fast:
+                from exllamav3.generator.job import ScoreGroup
+
+                # Without a group ("fast-solo", or EXL3_SYSTEMONE_GROUP=0) every question resumes on its own
+                # from the last page-boundary checkpoint: slower for 2+ questions, closer to the stock path's
+                # numerics (see exllamav3-patches/staging README entry)
+                grouped = path != "fast-solo" and os.environ.get("EXL3_SYSTEMONE_GROUP", "1") != "0"
+                group = ScoreGroup(split_at) if grouped and split_at and len(input_ids) > 1 else None
+                # Every member reserves pages up to the longest prompt, so questions 2..N can run as one
+                # right-padded batched forward (exllamav3-patches/16, EXL3_SYSTEMONE_BATCH)
+                pad_to = max(t.shape[-1] for t in input_ids) if group is not None else None
+                if "score_pad_to" not in inspect.signature(Job.__init__).parameters:
+                    pad_to = None
+                if group is not None and not batch:
+                    group.batch = False
+                # Enqueued together, with no await in between, so the whole group is registered before
+                # the iteration task next runs
+                for key, ids, labels in zip(keys, input_ids, label_ids):
+                    job = AsyncJob(
+                        self.generator,
+                        input_ids=ids,
+                        score_only=True,
+                        score_token_ids=labels,
+                        score_split_at=split_at,
+                        score_group=group,
+                        **({"score_pad_to": pad_to} if pad_to is not None else {}),
+                    )
+                    jobs.append(job)
+                    self.active_job_ids[key] = job
+
+                results = []
+                for job in jobs:
+                    result = None
+                    async for r in job:
+                        if r.get("stage") == "score":
+                            result = r
+                    if result is None:
+                        raise CancelledError("score job ended without a result")
+                    results.append({
+                        "logits": result["logits"].tolist(),
+                        "cached_tokens": result.get("cached_tokens", 0),
+                    })
+                return results, "fast"
+
+            from exllamav3.generator.sampler import ArgmaxSampler
+
+            vocab = self.config.vocab_size
+            results = []
+            for key, ids, labels in zip(keys, input_ids, label_ids):
+                job = AsyncJob(
+                    self.generator,
+                    input_ids=ids,
+                    max_new_tokens=1,
+                    sampler=ArgmaxSampler(),
+                    return_logits=True,
+                    decode_special_tokens=True,
+                    stop_conditions=[],
+                )
+                jobs.append(job)
+                self.active_job_ids[key] = job
+                last = None
+                async for r in job:
+                    if r.get("eos"):
+                        last = r
+                if last is None or last.get("logits") is None:
+                    raise CancelledError("generation ended without logits")
+                row = last["logits"][0, 0, :vocab].float()
+                results.append({
+                    "logits": [row[t].item() for t in labels],
+                    "cached_tokens": last.get("cached_tokens", 0),
+                })
+            return results, "stock"
+        except BaseException:
+            for job in jobs:
+                if not job.cancelled:
+                    await job.cancel()
+            raise
+        finally:
+            for key in keys:
+                self.active_job_ids.pop(key, None)
 
     def constrain_generation_output(self, request_id: str, text: str) -> bool:
         """
