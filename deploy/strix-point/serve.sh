@@ -12,6 +12,9 @@ CFG="$P/tabbyAPI/config.yml"
 export ROCM_PATH=/opt/rocm HIP_PATH=/opt/rocm EXL3_ROCM_SDK=/opt/rocm
 # Without streaming the n-gram table is loaded into RAM and the box swaps
 export EXL3_NGRAM_STREAM=1 EXL3_NGRAM_POPULATE=0
+# Two-stage draft head from yamz-labs/Qwen3.8-Flash-Next-EXL3-Yamz (fit on the base model's head; its final stage uses
+# our head exactly, so a mismatch only costs recall): 17.72 vs 16.62 t/s drafted, acceptance 0.757 vs 0.766 (2026-10-21)
+export EXL3_DRAFT2S="${EXL3_DRAFT2S-$P/models/flash-next/draft2s.st}"
 eval "$(python3 "$(dirname "$0")/kyojin-env.py" "$P/exllamav3")"
 export PYTHONPATH="$P/exllamav3"
 
