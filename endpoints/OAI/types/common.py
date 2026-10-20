@@ -71,6 +71,23 @@ class CompletionResponseFormat(BaseModel):
     type: str = "text"
     json_schema: Optional[object] = None
 
+    def resolved_json_schema(self):
+        """Return the JSON schema, unwrapped from the OAI envelope.
+
+        OpenAI nests the schema one level down as
+        ``{"name": ..., "strict": ..., "schema": {...}}``. Clients that follow
+        the spec (and llama.cpp-compatible ones) send the envelope; others send
+        a bare schema here. Unwrap only when the envelope is unambiguously
+        present -- ``schema`` is not a top-level JSON Schema keyword, so a
+        mapping under that key can only be the envelope's payload.
+        """
+
+        schema = self.json_schema
+        if isinstance(schema, dict) and isinstance(schema.get("schema"), dict):
+            return schema["schema"]
+
+        return schema
+
 
 class ChatCompletionStreamOptions(BaseModel):
     include_usage: Optional[bool] = False

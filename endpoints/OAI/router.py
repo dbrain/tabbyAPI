@@ -84,7 +84,7 @@ async def completion_request(request: Request, data: CompletionRequest) -> Compl
 
     # Also accept specific schema from response_format
     if data.response_format.type == "json_schema":
-        data.json_schema = data.response_format.json_schema
+        data.json_schema = data.response_format.resolved_json_schema()
 
     try:
         disconnect_handler = DisconnectHandler(request, f"{request_tag(request)} completions")
@@ -145,7 +145,7 @@ async def chat_completion_request(
 
     # Also accept specific schema from response_format
     if data.response_format.type == "json_schema":
-        data.json_schema = data.response_format.json_schema
+        data.json_schema = data.response_format.resolved_json_schema()
 
     try:
         disconnect_handler = DisconnectHandler(request, f"{request_tag(request)} chat/completions")
