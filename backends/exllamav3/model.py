@@ -2384,6 +2384,10 @@ class ExllamaV3Container:
                     yield finish_chunk
                     break
 
+            # A job the disconnect watcher cancelled ends its iteration without an EOS; leave the same way a
+            # disconnect seen by poll() inside the loop does
+            await disconnect_handler.poll()
+
         except CancelledError:
             if not job.cancelled:
                 await job.cancel()

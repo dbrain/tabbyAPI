@@ -136,6 +136,16 @@ class DisconnectHandler:
         self.disconnected = True
         self.abort_event.set()
 
+        # Cancel now rather than at the consumer's next poll(). The generator runs on this event loop, so the
+        # disconnect only lands between two iterate() calls, and the consumer woken by that round's result
+        # usually polls before this task has read the message: the job then ran one more prefill chunk
+        # (measured 9.6 s idle after a mid-prefill drop at chunk 4096). Cancelling here, in the same gap,
+        # stops it at the chunk in flight. The cancel is the same call the consumer's cleanup makes.
+        try:
+            await self._run_cleanup()
+        except Exception as exc:
+            logger.warning(f"Disconnect cleanup for {self.description} failed: {exc!r}")
+
     async def poll(self):
         """
         Check whether the request has disconnected. This does not suspend the caller. Once the
@@ -163,15 +173,22 @@ class DisconnectHandler:
         self.cleanup_tasks[key] = (func, args)
 
     async def finish(self, key):
-        # Intentionally strict
+        # Intentionally strict, except after a disconnect: the watcher has run (and dropped) every task
+        if self.disconnected:
+            self.cleanup_tasks.pop(key, None)
+            return
         del self.cleanup_tasks[key]
 
     # Safe to call redundantly, each cleanup task must be called exactly once
     async def cleanup(self):
         self._watcher.cancel()
-        for func, args in self.cleanup_tasks.values():
+        await self._run_cleanup()
+
+    async def _run_cleanup(self):
+        # Taken before running, so each task runs exactly once whichever caller gets here first
+        tasks, self.cleanup_tasks = self.cleanup_tasks, {}
+        for func, args in tasks.values():
             await func(*args)
-        self.cleanup_tasks = {}
 
 
 async def request_disconnect_loop(request: Request):
