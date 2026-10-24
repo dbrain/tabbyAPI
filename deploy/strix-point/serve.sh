@@ -1,5 +1,5 @@
 #!/bin/bash
-# Flash-Next (Swift1.5 EXL3 4.05) on exllamav3 1.6.3 + Kyojin kernels (dbrain/exllamav3 strix-point) behind
+# Flash-Next (Swift1.5 EXL3 4.05) on exllamav3 1.6.4 + Kyojin kernels (dbrain/exllamav3 strix-point) behind
 # TabbyAPI (dbrain/tabbyAPI strix-point) on Strix Point (gfx1150, 96 GB). Started by exl3-flashnext.service via
 # the drop-ins next to this file (install as /etc/systemd/system/<unit>.d/kyojin.conf); same port, API key and
 # model id as the llama.cpp flashnext.service it replaces. usage: serve.sh [port]
