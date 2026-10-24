@@ -10,6 +10,7 @@ CTX="${EXL3_CTX:-262144}"
 CFG="$P/tabbyAPI/config.yml"
 # EXL3_TREE points the server at another exllamav3 build (A/B of a dev tree through this unit)
 TREE="${EXL3_TREE:-$P/exllamav3}"
+DEPLOY="$(cd "$(dirname "$0")" && pwd)"
 
 export ROCM_PATH=/opt/rocm HIP_PATH=/opt/rocm EXL3_ROCM_SDK=/opt/rocm
 # Without streaming the n-gram table is loaded into RAM and the box swaps
@@ -38,6 +39,8 @@ model:
   model_name: flash-next
   backend: exllamav3
   inline_model_loading: false
+  # froggeric/Qwen-Fixed-Chat-Templates v22.5, unmodified: stock Qwen put Swift1.5 agent first turns into "the user hasn't asked anything" ~70% of the time (2026-10-24). Defaults to medium effort; callers pass reasoning_effort
+  prompt_template: $DEPLOY/flash-next.jinja
   max_seq_len: $CTX
   cache_size: $CTX
   # Q8 saves ~1 GiB per 131K tokens but costs ~4% decode (measured 2026-10-20); FP16 fits at 262K
