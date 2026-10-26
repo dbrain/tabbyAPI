@@ -301,6 +301,7 @@ class ExllamaV3Container:
     draft_policy: str = "default"
     ngram_match_min: int = 0
     hybrid_draft_tokens: int = 0
+    sparse_draft_head: int = 0
     recurrent_checkpoint_interval: Optional[int] = None
     recurrent_checkpoint_interval_pp: Optional[int] = None
     # Generator arguments for the persistent disk cache tier, resolved per load
@@ -472,6 +473,10 @@ class ExllamaV3Container:
         self.hybrid_draft_tokens = unwrap(draft_args.get("hybrid_draft_tokens"), 0)
         if self.hybrid_draft_tokens < 0:
             raise ValueError("hybrid_draft_tokens must be 0 (off) or greater")
+
+        self.sparse_draft_head = unwrap(draft_args.get("sparse_draft_head"), 0)
+        if self.sparse_draft_head < 0:
+            raise ValueError("sparse_draft_head must be 0 (off) or greater")
 
         # Always disable draft if params are incorrectly configured
         if draft_mode == "model" and draft_args and draft_model_name is None:
@@ -1288,6 +1293,8 @@ class ExllamaV3Container:
                 draft_confidence=self.draft_confidence,
                 ngram_match_min=self.ngram_match_min,
                 hybrid_draft_tokens=self.hybrid_draft_tokens,
+                # Only passed when set: exllamav3 builds before 1.6.5 have no sparse head
+                **({"sparse_draft_head": self.sparse_draft_head} if self.sparse_draft_head else {}),
                 **checkpoint_kwargs,
                 **self.disk_cache_kwargs,
             )

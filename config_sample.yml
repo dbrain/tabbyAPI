@@ -423,6 +423,11 @@ draft_model:
   # verification pass.
   hybrid_draft_tokens: 0
 
+  # Draft through a dynamic sparse LM head of this many vocabulary columns, selected from the
+  # token frequencies seen so far, for drafters that borrow the target's head (MTP, DFlash).
+  # Verification uses the full head, so output is unaffected (default: 0, off; exllamav3 1.6.5+).
+  sparse_draft_head: 0
+
 # Options for Sampling
 sampling:
   # Select a sampler override preset (default: None).

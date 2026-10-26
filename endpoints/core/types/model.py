@@ -118,6 +118,7 @@ class DraftModelLoadRequest(_WarnOnUnknownFields):
     draft_policy: Optional[Literal["default", "tier"]] = None
     ngram_match_min: Optional[int] = None
     hybrid_draft_tokens: Optional[int] = None
+    sparse_draft_head: Optional[int] = None
     draft_rope_scale: Optional[float] = None
     draft_rope_alpha: Optional[Union[float, Literal["auto"]]] = Field(
         description='Automatically calculated if set to "auto"',

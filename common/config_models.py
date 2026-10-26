@@ -734,6 +734,16 @@ class DraftModelConfig(BaseConfigModel):
         ),
         ge=0,
     )
+    sparse_draft_head: Optional[int] = Field(
+        0,
+        description=(
+            "Draft through a dynamic sparse LM head of this many vocabulary columns,\n"
+            "selected from the token frequencies seen so far, for drafters that borrow\n"
+            "the target's head (MTP, DFlash). Verification uses the full head, so output\n"
+            "is unaffected (default: 0, off; exllamav3 1.6.5 or newer)."
+        ),
+        ge=0,
+    )
 
 
 class SamplingConfig(BaseConfigModel):

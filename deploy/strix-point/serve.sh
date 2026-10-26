@@ -1,5 +1,5 @@
 #!/bin/bash
-# Flash-Next (Swift1.5 EXL3 4.05) on exllamav3 1.6.4 + Kyojin kernels (dbrain/exllamav3 strix-point) behind
+# Flash-Next (Swift1.5 EXL3 4.05) on exllamav3 1.6.5 + Kyojin kernels (dbrain/exllamav3 strix-point) behind
 # TabbyAPI (dbrain/tabbyAPI strix-point) on Strix Point (gfx1150, 96 GB). Started by exl3-flashnext.service via
 # the drop-ins next to this file (install as /etc/systemd/system/<unit>.d/kyojin.conf); same port, API key and
 # model id as the llama.cpp flashnext.service it replaces. usage: serve.sh [port]
@@ -43,8 +43,8 @@ model:
   prompt_template: $DEPLOY/flash-next.jinja
   max_seq_len: $CTX
   cache_size: $CTX
-  # Q8 saves ~1 GiB per 131K tokens but costs ~4% decode (measured 2026-10-20); FP16 fits at 262K
-  cache_mode: FP16
+  # FP16 fits at 262K. 8,4 (2026-10-26, 1.6.5, 8K): -3.5 GiB GTT, decode flat, prefill 350 -> 247 t/s (quantized-cache staging)
+  cache_mode: ${EXL3_CACHE_MODE:-FP16}
   chunk_size: 4096
   output_chunking: true
   max_batch_size: 1
@@ -57,6 +57,9 @@ draft_model:
   draft_mode: mtp
   draft_num_tokens: 7
   draft_policy: tier
+  # exllamav3 1.6.5 sparse draft head columns (EXL3_SPARSE_HEAD, A/B only). With EXL3_DRAFT2S= and 4096 columns: 14.7 vs
+  # 20.2 t/s drafted, acceptance 0.38 vs 0.72 (2026-10-26): the tier policy's depth rule reads draft_p, which only draft2s exports
+  sparse_draft_head: ${EXL3_SPARSE_HEAD:-0}
 sampling:
   temperature:
     override: 1.0
