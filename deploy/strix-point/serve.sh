@@ -15,6 +15,8 @@ DEPLOY="$(cd "$(dirname "$0")" && pwd)"
 export ROCM_PATH=/opt/rocm HIP_PATH=/opt/rocm EXL3_ROCM_SDK=/opt/rocm
 # Without streaming the n-gram table is loaded into RAM and the box swaps
 export EXL3_NGRAM_STREAM=1 EXL3_NGRAM_POPULATE=0
+# Token embedding rows read from the file on lookup: -0.85 GB anonymous RSS, decode/prefill unchanged (2026-10-27)
+export EXL3_EMBED_STREAM="${EXL3_EMBED_STREAM-1}"
 # Two-stage draft head, packed for Swift's head with tools/qwen/draft2s_pack.py from 42K captured draft steps
 # (exl3-bench/profile/d2s_*.py): 17.78 vs 16.62 t/s drafted with the full head; Kyojin's Yamz pack gave 17.72 (2026-10-21)
 export EXL3_DRAFT2S="${EXL3_DRAFT2S-$P/models/flash-next/draft2s.st}"
@@ -54,9 +56,14 @@ model:
   start_in_reasoning: auto
   tool_calls_in_reasoning: true
 draft_model:
-  draft_mode: mtp
-  draft_num_tokens: 7
-  draft_policy: tier
+  # EXL3_DRAFT_* (A/B only): e.g. a DFlash2 drafter is MODE=model NAME=<dir under tinyfiddler/models> POLICY=default
+  draft_mode: ${EXL3_DRAFT_MODE:-mtp}
+  draft_model_dir: /home/dbrain/dev/tinyfiddler/models
+  draft_model_name: ${EXL3_DRAFT_NAME:-}
+  draft_num_tokens: ${EXL3_DRAFT_TOKENS:-7}
+  draft_policy: ${EXL3_DRAFT_POLICY:-tier}
+  dynamic_draft: ${EXL3_DRAFT_DYNAMIC:-false}
+  draft_confidence: ${EXL3_DRAFT_CONFIDENCE:-0.4}
   # exllamav3 1.6.5 sparse draft head columns (EXL3_SPARSE_HEAD, A/B only). With EXL3_DRAFT2S= and 4096 columns: 14.7 vs
   # 20.2 t/s drafted, acceptance 0.38 vs 0.72 (2026-10-26): the tier policy's depth rule reads draft_p, which only draft2s exports
   sparse_draft_head: ${EXL3_SPARSE_HEAD:-0}
