@@ -1,5 +1,5 @@
 #!/bin/bash
-# Flash-Next (Swift1.5 EXL3 4.05) on exllamav3 1.6.5 + Kyojin kernels (dbrain/exllamav3 strix-point) behind
+# Flash-Next (Swift1.5 EXL3 4.05) on exllamav3 1.6.6 + Kyojin kernels (dbrain/exllamav3 strix-point) behind
 # TabbyAPI (dbrain/tabbyAPI strix-point) on Strix Point (gfx1150, 96 GB). Started by exl3-flashnext.service via
 # the drop-ins next to this file (install as /etc/systemd/system/<unit>.d/kyojin.conf); same port, API key and
 # model id as the llama.cpp flashnext.service it replaces. usage: serve.sh [port]
@@ -7,7 +7,9 @@ set -euo pipefail
 P=/home/dbrain/dev/tinyfiddler/exl3-prod
 PORT="${1:-8765}"
 CTX="${EXL3_CTX:-262144}"
-CFG="$P/tabbyAPI/config.yml"
+# The tabbyAPI checkout this script lives in (prod, or a dev clone for an A/B: ab-tree.sh AB_TABBY)
+TABBY="$(cd "$(dirname "$0")/../.." && pwd)"
+CFG="$TABBY/config.yml"
 # EXL3_TREE points the server at another exllamav3 build (A/B of a dev tree through this unit)
 TREE="${EXL3_TREE:-$P/exllamav3}"
 DEPLOY="$(cd "$(dirname "$0")" && pwd)"
@@ -17,6 +19,9 @@ export ROCM_PATH=/opt/rocm HIP_PATH=/opt/rocm EXL3_ROCM_SDK=/opt/rocm
 export EXL3_NGRAM_STREAM=1 EXL3_NGRAM_POPULATE=0
 # Token embedding rows read from the file on lookup: -0.85 GB anonymous RSS, decode/prefill unchanged (2026-10-27)
 export EXL3_EMBED_STREAM="${EXL3_EMBED_STREAM-1}"
+# Kyojin 1.8.3 defaults the GDN recurrence to v_split 1 (tuned on gfx1151); on gfx1150 that cost 8K prefill 391 -> 373/378
+# with drafted decode flat (22.58 either way), so keep 4 (2026-11-02)
+export EXL3_GDN_VSPLIT_GDN="${EXL3_GDN_VSPLIT_GDN-4}"
 # Two-stage draft head, packed for Swift's head with tools/qwen/draft2s_pack.py from 42K captured draft steps
 # (exl3-bench/profile/d2s_*.py): 17.78 vs 16.62 t/s drafted with the full head; Kyojin's Yamz pack gave 17.72 (2026-10-21)
 export EXL3_DRAFT2S="${EXL3_DRAFT2S-$P/models/flash-next/draft2s.st}"
@@ -89,5 +94,5 @@ memory:
   disk_cache_size: 131072
 YML
 
-cd "$P/tabbyAPI"
+cd "$TABBY"
 exec "$P/venv/bin/python" main.py --config "$CFG"
