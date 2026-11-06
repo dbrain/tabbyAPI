@@ -22,6 +22,9 @@ export EXL3_EMBED_STREAM="${EXL3_EMBED_STREAM-1}"
 # Kyojin 1.8.3 defaults the GDN recurrence to v_split 1 (tuned on gfx1151); on gfx1150 that cost 8K prefill 391 -> 373/378
 # with drafted decode flat (22.58 either way), so keep 4 (2026-11-02)
 export EXL3_GDN_VSPLIT_GDN="${EXL3_GDN_VSPLIT_GDN-4}"
+# Recurrent checkpoints disk-first (0 MB RAM; evicted chain ends go straight to the disk tier): 60 distinct chats held
+# server RSS at 6.5 GiB vs 10.5 GiB + 1 GiB swap at 4096, resume/prefill unchanged, ~135 MB disk write per chat (2026-11-06)
+RC_MB="${EXL3_RC_MB:-0}"
 # Two-stage draft head, packed for Swift's head with tools/qwen/draft2s_pack.py from 42K captured draft steps
 # (exl3-bench/profile/d2s_*.py): 17.78 vs 16.62 t/s drafted with the full head; Kyojin's Yamz pack gave 17.72 (2026-10-21)
 export EXL3_DRAFT2S="${EXL3_DRAFT2S-$P/models/flash-next/draft2s.st}"
@@ -88,7 +91,7 @@ sampling:
 memory:
   cuda_malloc_async: false
   sysmem_kv_cache: 4096
-  sysmem_recurrent_cache: 4096
+  sysmem_recurrent_cache: $RC_MB
   sysmem_multimodal_cache: 1024
   disk_cache_dir: /home/dbrain/dev/tinyfiddler/.exl3-diskcache-kyojin
   disk_cache_size: 131072
