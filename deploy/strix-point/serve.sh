@@ -25,6 +25,9 @@ export EXL3_GDN_VSPLIT_GDN="${EXL3_GDN_VSPLIT_GDN-4}"
 # Recurrent checkpoints disk-first (0 MB RAM; evicted chain ends go straight to the disk tier): 60 distinct chats held
 # server RSS at 6.5 GiB vs 10.5 GiB + 1 GiB swap at 4096, resume/prefill unchanged, ~135 MB disk write per chat (2026-11-06)
 RC_MB="${EXL3_RC_MB:-0}"
+# Relaxed acceptance of MTP drafts for sampled requests (Kyojin EXL3_SPEC_TYPICAL): temp 1.0 decode 21.2 -> 23.3 t/s, temp 0.6
+# long thinking 24.6 -> 25.5; 10 reasoning prompts: no runaways, same answers. Not exact sampling; 0 turns it off (2026-11-16)
+export EXL3_SPEC_TYPICAL="${EXL3_SPEC_TYPICAL-1}"
 # Two-stage draft head, packed for Swift's head with tools/qwen/draft2s_pack.py from 42K captured draft steps
 # (exl3-bench/profile/d2s_*.py): 17.78 vs 16.62 t/s drafted with the full head; Kyojin's Yamz pack gave 17.72 (2026-10-21)
 export EXL3_DRAFT2S="${EXL3_DRAFT2S-$P/models/flash-next/draft2s.st}"
